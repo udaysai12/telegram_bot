@@ -10,15 +10,33 @@ let driveInstance = null;
 function getDriveClient() {
   if (driveInstance) return driveInstance;
 
-  if (!config.credentialsPath) {
-    throw new Error('Google Application Credentials path is not configured.');
-  }
+  let auth;
 
-  // Set up service account authentication
-  const auth = new google.auth.GoogleAuth({
-    keyFile: config.credentialsPath,
-    scopes: ['https://www.googleapis.com/auth/drive'],
-  });
+  // 1. Try reading credentials from a JSON string in environment variable (Render / Cloud deployment)
+  if (process.env.GOOGLE_CREDENTIALS_JSON) {
+    try {
+      const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+      auth = new google.auth.GoogleAuth({
+        credentials,
+        scopes: ['https://www.googleapis.com/auth/drive'],
+      });
+      console.log('[Drive] Initialized authentication using GOOGLE_CREDENTIALS_JSON environment variable.');
+    } catch (err) {
+      throw new Error(`Failed to parse GOOGLE_CREDENTIALS_JSON: ${err.message}`);
+    }
+  } 
+  // 2. Try reading credentials from the file path
+  else if (config.credentialsPath && fs.existsSync(config.credentialsPath)) {
+    auth = new google.auth.GoogleAuth({
+      keyFile: config.credentialsPath,
+      scopes: ['https://www.googleapis.com/auth/drive'],
+    });
+    console.log(`[Drive] Initialized authentication using credentials file: ${config.credentialsPath}`);
+  } 
+  // 3. Fail if neither is found
+  else {
+    throw new Error('Google Drive credentials not found! Set GOOGLE_CREDENTIALS_JSON or provide credentials.json file.');
+  }
 
   driveInstance = google.drive({ version: 'v3', auth });
   return driveInstance;
