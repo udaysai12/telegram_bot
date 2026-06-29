@@ -4,6 +4,7 @@ node_modules/
 # Credentials & Config
 .env
 credentials.json
+session.txt
 
 # Temporary local downloads
 downloads/

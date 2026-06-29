@@ -88,8 +88,9 @@ function getFileFromMessage(message) {
     return {
       media: message.media,
       fileName: `photo_${Date.now()}.jpg`,
-      fileSize: 0, // Size is computed during download or not explicitly used
+      fileSize: 0,
       mimeType: 'image/jpeg',
+      isPhoto: true,
     };
   }
 
@@ -133,20 +134,31 @@ async function processQueue() {
   try {
     console.log(`[Queue] Processing file: ${task.fileName} (${task.fileSize} bytes)`);
 
-    // 1. Download file from Telegram using stream
+    // 1. Download file from Telegram
+    // Photos use downloadMedia (no document), Documents use downloadFile with explicit dcId
     await updateProgressMessage(
       task.chatId,
       task.progressMessageId,
       `📥 *Downloading from Telegram...*\n${formatProgressBar(0, task.fileSize)}`
     );
 
-    await downloadTelegramFile(task.media, localFilePath, async (progress) => {
-      await updateProgressMessage(
-        task.chatId,
-        task.progressMessageId,
-        `📥 *Downloading from Telegram...*\n${formatProgressBar(progress.percentage, progress.totalBytes)}`
-      );
-    });
+    if (task.isPhoto) {
+      // Photos: use downloadMedia and write the buffer to disk
+      const buffer = await client.downloadMedia(task.media, {});
+      if (!buffer || buffer.length === 0) {
+        throw new Error('Downloaded photo buffer is empty.');
+      }
+      fs.writeFileSync(localFilePath, buffer);
+    } else {
+      // Documents/Videos: stream download using explicit dcId
+      await downloadTelegramFile(task.media, localFilePath, async (progress) => {
+        await updateProgressMessage(
+          task.chatId,
+          task.progressMessageId,
+          `📥 *Downloading from Telegram...*\n${formatProgressBar(progress.percentage, progress.totalBytes)}`
+        );
+      });
+    }
 
     isDownloaded = true;
     console.log(`[Queue] Successfully downloaded local file: ${localFilePath}`);
@@ -339,6 +351,7 @@ function initBot() {
       fileName: finalFileName,
       fileSize: fileData.fileSize,
       mimeType: fileData.mimeType,
+      isPhoto: fileData.isPhoto || false,
       progressMessageId: placeholderMsg.id,
     });
 

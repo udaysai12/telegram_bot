@@ -1,9 +1,23 @@
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
+const fs = require('fs');
+const path = require('path');
 const config = require('./config');
 
-// Initialize StringSession (empty is fine for bot accounts)
-const stringSession = new StringSession('');
+const sessionFilePath = path.resolve(__dirname, '../session.txt');
+let sessionString = '';
+
+if (fs.existsSync(sessionFilePath)) {
+  try {
+    sessionString = fs.readFileSync(sessionFilePath, 'utf8').trim();
+    console.log('[Telegram] Loaded existing session string.');
+  } catch (err) {
+    console.error('[Telegram] Failed to read session.txt, starting fresh:', err.message);
+  }
+}
+
+// Initialize StringSession
+const stringSession = new StringSession(sessionString);
 
 // Create TelegramClient instance
 const client = new TelegramClient(stringSession, config.telegramApiId, config.telegramApiHash, {
@@ -18,41 +32,82 @@ async function startTelegramClient() {
   await client.start({
     botAuthToken: config.botToken,
   });
-  console.log('[Telegram] Bot Client connected and authorized successfully!');
+  
+  try {
+    const savedSession = client.session.save();
+    fs.writeFileSync(sessionFilePath, savedSession, 'utf8');
+    console.log('[Telegram] Bot Client connected and session saved successfully.');
+  } catch (err) {
+    console.error('[Telegram] Failed to save session string:', err.message);
+  }
 }
 
 /**
- * Streams media directly to a local file using client.downloadMedia.
- * Prevents memory exhaustion for large files (1GB - 2GB).
+ * Streams media directly to a local file using client.downloadFile with an
+ * explicit dcId to avoid cross-DC AUTH_BYTES_INVALID errors.
  * 
- * @param {object} media - The message media object to download.
+ * @param {object} media - The message media object (MessageMediaDocument).
  * @param {string} localPath - The destination path on the local filesystem.
- * @param {function} onProgress - Progress callback receiving (downloadedBytes, totalBytes).
+ * @param {function} onProgress - Progress callback receiving { downloadedBytes, totalBytes, percentage }.
  */
 async function downloadTelegramFile(media, localPath, onProgress) {
-  // Throttle progress updates to avoid spamming the logs/Telegram API
-  let lastProgressUpdate = 0;
-  const updateIntervalMs = 2000; // Update at most every 2 seconds
+  const { Api } = require('telegram');
 
-  await client.downloadMedia(media, {
-    outputFile: localPath,
-    progressCallback: (downloadedBytes, totalBytes) => {
-      const now = Date.now();
-      const total = totalBytes || 0;
-      
-      if (now - lastProgressUpdate > updateIntervalMs || downloadedBytes === total) {
-        lastProgressUpdate = now;
-        if (onProgress && typeof onProgress === 'function') {
-          onProgress({
-            downloadedBytes,
-            totalBytes: total,
-            percentage: total > 0 ? ((downloadedBytes / total) * 100).toFixed(1) : '0.0',
-          });
-        }
-      }
-    },
+  // Extract document from media
+  const doc = media.document;
+  if (!doc) {
+    throw new Error('No document found in media object.');
+  }
+
+  const totalBytes = doc.size ? Number(doc.size.toString()) : 0;
+  const dcId = doc.dcId;
+
+  // Build the InputDocumentFileLocation
+  const fileLocation = new Api.InputDocumentFileLocation({
+    id: doc.id,
+    accessHash: doc.accessHash,
+    fileReference: doc.fileReference,
+    thumbSize: '',
   });
+
+  // Throttle progress updates
+  let lastProgressUpdate = 0;
+  const updateIntervalMs = 2000;
+
+  const outputStream = require('fs').createWriteStream(localPath);
+
+  try {
+    // Use downloadFile with explicit dcId and write stream
+    const result = await client.downloadFile(fileLocation, {
+      dcId: dcId,
+      fileSize: totalBytes,
+      outputFile: localPath,
+      progressCallback: (receivedBytes) => {
+        const now = Date.now();
+        const received = Number(receivedBytes.toString());
+
+        if (now - lastProgressUpdate > updateIntervalMs || received >= totalBytes) {
+          lastProgressUpdate = now;
+          if (onProgress && typeof onProgress === 'function') {
+            onProgress({
+              downloadedBytes: received,
+              totalBytes,
+              percentage: totalBytes > 0 ? ((received / totalBytes) * 100).toFixed(1) : '0.0',
+            });
+          }
+        }
+      },
+    });
+
+    // result might be a Buffer if outputFile is not correctly handled
+    if (Buffer.isBuffer(result) && result.length > 0) {
+      require('fs').writeFileSync(localPath, result);
+    }
+  } finally {
+    try { outputStream.close(); } catch (_) {}
+  }
 }
+
 
 /**
  * Generates a clean text progress bar representation.
