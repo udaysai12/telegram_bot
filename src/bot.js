@@ -6,6 +6,27 @@ const config = require('./config');
 const { client, downloadTelegramFile, formatProgressBar } = require('./telegram');
 const { uploadFile, makeFilePublic, getDirectDownloadLink } = require('./drive');
 
+
+/**
+ * Sanitizes a string to make it a safe filename.
+ * Strips out newlines and keeps only the first line of multiline inputs.
+ * Replaces illegal filename characters with underscores.
+ */
+function sanitizeFilename(name) {
+  if (!name) return 'file';
+  const lines = name.split(/\r?\n/);
+  let firstLine = lines.find(line => line.trim().length > 0) || 'file';
+  firstLine = firstLine.trim();
+
+  let cleanName = firstLine.replace(/[\\/:*?"<>|]/g, '_');
+  
+  if (/^\.*$/.test(cleanName) || cleanName.length === 0) {
+    cleanName = 'file';
+  }
+  
+  return cleanName;
+}
+
 // Enforce downloads directory exists
 const downloadsDir = path.resolve(__dirname, '../downloads');
 if (!fs.existsSync(downloadsDir)) {
@@ -50,7 +71,7 @@ function getFileFromMessage(message) {
         (attr) => attr.className === 'DocumentAttributeFilename'
       );
       if (filenameAttr && filenameAttr.fileName) {
-        fileName = filenameAttr.fileName;
+        fileName = sanitizeFilename(filenameAttr.fileName);
       }
     }
     
@@ -292,7 +313,7 @@ function initBot() {
     // Determine file name: respect message text/caption for renaming
     let finalFileName = fileData.fileName;
     if (message.message && !message.message.startsWith('/')) {
-      const caption = message.message.trim();
+      const caption = sanitizeFilename(message.message);
       const ext = path.extname(fileData.fileName);
       if (path.extname(caption) === '') {
         finalFileName = caption + ext;
@@ -300,6 +321,9 @@ function initBot() {
         finalFileName = caption;
       }
     }
+
+    // Ensure the final filename is fully sanitized
+    finalFileName = sanitizeFilename(finalFileName);
 
     // Send initial status message to user
     const placeholderMsg = await client.sendMessage(chatId, {
