@@ -1,4 +1,4 @@
-const { TelegramClient } = require('telegram');
+const { TelegramClient, helpers } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const fs = require('fs');
 const path = require('path');
@@ -52,6 +52,7 @@ async function startTelegramClient() {
  */
 async function downloadTelegramFile(media, localPath, onProgress) {
   const { Api } = require('telegram');
+  const bigInt = require('big-integer');
 
   // Extract document from media
   const doc = media.document;
@@ -59,7 +60,9 @@ async function downloadTelegramFile(media, localPath, onProgress) {
     throw new Error('No document found in media object.');
   }
 
-  const totalBytes = doc.size ? Number(doc.size.toString()) : 0;
+  // doc.size is already a GramJS BigInt from TL parsing — do NOT convert to Number
+  const fileSizeBigInt = doc.size;
+  const totalBytes = Number(fileSizeBigInt.toString());
   const dcId = doc.dcId;
 
   // Build the InputDocumentFileLocation
@@ -74,37 +77,31 @@ async function downloadTelegramFile(media, localPath, onProgress) {
   let lastProgressUpdate = 0;
   const updateIntervalMs = 2000;
 
-  const outputStream = require('fs').createWriteStream(localPath);
+  // Pass doc.size (BigInt) directly — GramJS requires its own BigInt type for fileSize
+  const result = await client.downloadFile(fileLocation, {
+    dcId: dcId,
+    fileSize: fileSizeBigInt,
+    outputFile: localPath,
+    progressCallback: (receivedBytes) => {
+      const now = Date.now();
+      const received = Number(receivedBytes.toString ? receivedBytes.toString() : receivedBytes);
 
-  try {
-    // Use downloadFile with explicit dcId and write stream
-    const result = await client.downloadFile(fileLocation, {
-      dcId: dcId,
-      fileSize: totalBytes,
-      outputFile: localPath,
-      progressCallback: (receivedBytes) => {
-        const now = Date.now();
-        const received = Number(receivedBytes.toString());
-
-        if (now - lastProgressUpdate > updateIntervalMs || received >= totalBytes) {
-          lastProgressUpdate = now;
-          if (onProgress && typeof onProgress === 'function') {
-            onProgress({
-              downloadedBytes: received,
-              totalBytes,
-              percentage: totalBytes > 0 ? ((received / totalBytes) * 100).toFixed(1) : '0.0',
-            });
-          }
+      if (now - lastProgressUpdate > updateIntervalMs || (totalBytes > 0 && received >= totalBytes)) {
+        lastProgressUpdate = now;
+        if (onProgress && typeof onProgress === 'function') {
+          onProgress({
+            downloadedBytes: received,
+            totalBytes,
+            percentage: totalBytes > 0 ? ((received / totalBytes) * 100).toFixed(1) : '0.0',
+          });
         }
-      },
-    });
+      }
+    },
+  });
 
-    // result might be a Buffer if outputFile is not correctly handled
-    if (Buffer.isBuffer(result) && result.length > 0) {
-      require('fs').writeFileSync(localPath, result);
-    }
-  } finally {
-    try { outputStream.close(); } catch (_) {}
+  // If GramJS returned a Buffer instead of writing to disk, write it now
+  if (Buffer.isBuffer(result) && result.length > 0) {
+    require('fs').writeFileSync(localPath, result);
   }
 }
 
