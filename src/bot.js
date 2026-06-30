@@ -173,16 +173,23 @@ async function processQueue() {
       `📤 *Uploading to Google Drive...*\n${formatProgressBar(0, actualSize)}`
     );
 
+    let lastUploadProgressUpdate = 0;
+    const uploadUpdateIntervalMs = 3000;
+
     const driveFile = await uploadFile(
       localFilePath,
       task.fileName,
       task.mimeType,
       async (progress) => {
-        await updateProgressMessage(
-          task.chatId,
-          task.progressMessageId,
-          `📤 *Uploading to Google Drive...*\n${formatProgressBar(progress.percentage, progress.totalBytes)}`
-        );
+        const now = Date.now();
+        if (now - lastUploadProgressUpdate > uploadUpdateIntervalMs || progress.percentage === '100.0') {
+          lastUploadProgressUpdate = now;
+          await updateProgressMessage(
+            task.chatId,
+            task.progressMessageId,
+            `📤 *Uploading to Google Drive...*\n${formatProgressBar(progress.percentage, progress.totalBytes)}`
+          );
+        }
       }
     );
 
